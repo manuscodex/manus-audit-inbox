@@ -1,0 +1,10 @@
+client/index.html
+client/public/robots.txt
+client/src/pages/History.tsx
+client/src/pages/Home.tsx
+client/src/pages/Lottery.tsx
+client/src/pages/admin/AdminLottery.tsx
+server/_core/index.ts
+server/routers.ts
+shared/lottery.ts
+todo.md
