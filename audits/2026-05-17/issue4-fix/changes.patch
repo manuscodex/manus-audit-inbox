@@ -1,0 +1,482 @@
+[1mdiff --git a/client/index.html b/client/index.html[m
+[1mindex 3671546..d71006f 100644[m
+[1m--- a/client/index.html[m
+[1m+++ b/client/index.html[m
+[36m@@ -9,12 +9,11 @@[m
+     <link rel="icon" href="/favicon.ico" type="image/x-icon" />[m
+     <title>GGC Gaming</title>[m
+     <meta name="description" content="GGC Gaming — Provably fair on-chain games on BNB Chain. CoinFlip, Dice, Wheel, Crash, Lottery and more. Every bet settled by smart contract." />[m
+[31m-    <meta name="robots" content="index, follow" />[m
+[31m-    <link rel="canonical" href="https://gg.world" />[m
+[32m+[m
+     <meta property="og:type" content="website" />[m
+     <meta property="og:title" content="GGC Gaming — Provably Fair On-Chain Games" />[m
+     <meta property="og:description" content="Play CoinFlip, Dice, Wheel, Crash, Mega Millions & Powerball on BNB Chain. Every bet settled by smart contract." />[m
+[31m-    <meta property="og:url" content="https://gg.world" />[m
+[32m+[m[32m    <meta property="og:url" content="https://gg.world/" />[m
+     <meta property="og:site_name" content="GGC Gaming" />[m
+     <meta property="og:image" content="https://d2xsxph8kpxj0f.cloudfront.net/310519663589979947/HHPbeGJEmc5re3J5oabHGz/ggc-og-preview-YtedRZgKa6doohkdWZoH45.png" />[m
+     <meta property="og:image:width" content="2560" />[m
+[1mdiff --git a/server/_core/index.ts b/server/_core/index.ts[m
+[1mindex 6e7ae00..16ac5b7 100644[m
+[1m--- a/server/_core/index.ts[m
+[1m+++ b/server/_core/index.ts[m
+[36m@@ -10,6 +10,7 @@[m [mimport { createContext } from "./context";[m
+ import { serveStatic, setupVite } from "./vite";[m
+ import { startGgcEmbeddedWorkers } from "../workers";[m
+ import { lotterySettleHandler } from "../lotterySettleHandler";[m
+[32m+[m[32mimport { canonicalForPath, isKnownPublicRoute, shouldSkipSpaSeo } from "../seoRoutes";[m
+ [m
+ function isPortAvailable(port: number): Promise<boolean> {[m
+   return new Promise(resolve => {[m
+[36m@@ -49,6 +50,27 @@[m [masync function startServer() {[m
+       createContext,[m
+     })[m
+   );[m
+[32m+[m[32m  // SEO middleware: set canonical, robots, and 404 status for unknown routes[m
+[32m+[m[32m  // Must run BEFORE Vite/static fallback serves index.html[m
+[32m+[m[32m  app.use((req, res, next) => {[m
+[32m+[m[32m    if (req.method !== "GET" && req.method !== "HEAD") return next();[m
+[32m+[m[32m    if (shouldSkipSpaSeo(req.path)) return next();[m
+[32m+[m
+[32m+[m[32m    const canonical = canonicalForPath(req.path);[m
+[32m+[m[32m    const isKnownRoute = isKnownPublicRoute(req.path);[m
+[32m+[m
+[32m+[m[32m    res.locals.seo = {[m
+[32m+[m[32m      canonical,[m
+[32m+[m[32m      robots: isKnownRoute ? "index, follow" : "noindex, follow",[m
+[32m+[m[32m    };[m
+[32m+[m
+[32m+[m[32m    if (!isKnownRoute) {[m
+[32m+[m[32m      res.status(404);[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    next();[m
+[32m+[m[32m  });[m
+[32m+[m
+   // development mode uses Vite, production mode uses static files[m
+   if (process.env.NODE_ENV === "development") {[m
+     await setupVite(app, server);[m
+[1mdiff --git a/server/_core/vite.ts b/server/_core/vite.ts[m
+[1mindex 86d07f6..297196d 100644[m
+[1m--- a/server/_core/vite.ts[m
+[1m+++ b/server/_core/vite.ts[m
+[36m@@ -6,6 +6,39 @@[m [mimport path from "path";[m
+ import { createServer as createViteServer } from "vite";[m
+ import viteConfig from "../../vite.config";[m
+ [m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  SEO head injection — idempotent canonical + robots                */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+[32m+[m[32mfunction escapeHtmlAttr(value: string): string {[m
+[32m+[m[32m  return value[m
+[32m+[m[32m    .replaceAll("&", "&amp;")[m
+[32m+[m[32m    .replaceAll('"', "&quot;")[m
+[32m+[m[32m    .replaceAll("<", "&lt;")[m
+[32m+[m[32m    .replaceAll(">", "&gt;");[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mexport function injectSeoHead([m
+[32m+[m[32m  html: string,[m
+[32m+[m[32m  seo: { canonical: string; robots: string }[m
+[32m+[m[32m): string {[m
+[32m+[m[32m  // Strip every pre-existing canonical and robots tag first[m
+[32m+[m[32m  const cleanHtml = html[m
+[32m+[m[32m    .replace(/\s*<link\s+rel=["']canonical["'][^>]*>\s*/gi, "\n")[m
+[32m+[m[32m    .replace(/\s*<meta\s+name=["']robots["'][^>]*>\s*/gi, "\n");[m
+[32m+[m
+[32m+[m[32m  const tags = [[m
+[32m+[m[32m    `<meta name="robots" content="${escapeHtmlAttr(seo.robots)}" />`,[m
+[32m+[m[32m    `<link rel="canonical" href="${escapeHtmlAttr(seo.canonical)}" />`,[m
+[32m+[m[32m  ].join("\n    ");[m
+[32m+[m
+[32m+[m[32m  return cleanHtml.replace("</head>", `    ${tags}\n  </head>`);[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  Development: Vite dev server with HMR                             */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+ export async function setupVite(app: Express, server: Server) {[m
+   const serverOptions = {[m
+     middlewareMode: true,[m
+[36m@@ -38,8 +71,18 @@[m [mexport async function setupVite(app: Express, server: Server) {[m
+         `src="/src/main.tsx"`,[m
+         `src="/src/main.tsx?v=${nanoid()}"`[m
+       );[m
+[31m-      const page = await vite.transformIndexHtml(url, template);[m
+[31m-      res.status(200).set({ "Content-Type": "text/html" }).end(page);[m
+[32m+[m[32m      let page = await vite.transformIndexHtml(url, template);[m
+[32m+[m
+[32m+[m[32m      // Inject route-specific canonical + robots from SEO middleware[m
+[32m+[m[32m      const seo = res.locals.seo ?? {[m
+[32m+[m[32m        canonical: "https://gg.world/",[m
+[32m+[m[32m        robots: "index, follow",[m
+[32m+[m[32m      };[m
+[32m+[m[32m      page = injectSeoHead(page, seo);[m
+[32m+[m
+[32m+[m[32m      // Preserve status code set by SEO middleware (e.g. 404)[m
+[32m+[m[32m      const statusCode = res.statusCode && res.statusCode !== 200 ? res.statusCode : 200;[m
+[32m+[m[32m      res.status(statusCode).set({ "Content-Type": "text/html" }).end(page);[m
+     } catch (e) {[m
+       vite.ssrFixStacktrace(e as Error);[m
+       next(e);[m
+[36m@@ -47,6 +90,10 @@[m [mexport async function setupVite(app: Express, server: Server) {[m
+   });[m
+ }[m
+ [m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  Production: static file serving                                   */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+ export function serveStatic(app: Express) {[m
+   const distPath =[m
+     process.env.NODE_ENV === "development"[m
+[36m@@ -62,6 +109,18 @@[m [mexport function serveStatic(app: Express) {[m
+ [m
+   // fall through to index.html if the file doesn't exist[m
+   app.use("*", (_req, res) => {[m
+[31m-    res.sendFile(path.resolve(distPath, "index.html"));[m
+[32m+[m[32m    const indexPath = path.resolve(distPath, "index.html");[m
+[32m+[m[32m    let html = fs.readFileSync(indexPath, "utf-8");[m
+[32m+[m
+[32m+[m[32m    // Inject route-specific canonical + robots from SEO middleware[m
+[32m+[m[32m    const seo = res.locals.seo ?? {[m
+[32m+[m[32m      canonical: "https://gg.world/",[m
+[32m+[m[32m      robots: "index, follow",[m
+[32m+[m[32m    };[m
+[32m+[m[32m    html = injectSeoHead(html, seo);[m
+[32m+[m
+[32m+[m[32m    // Preserve status code set by SEO middleware (e.g. 404)[m
+[32m+[m[32m    const statusCode = res.statusCode && res.statusCode !== 200 ? res.statusCode : 200;[m
+[32m+[m[32m    res.status(statusCode).set({ "Content-Type": "text/html" }).end(html);[m
+   });[m
+ }[m
+[1mdiff --git a/server/lotterySettleHandler.ts b/server/lotterySettleHandler.ts[m
+[1mindex 6252532..6533e92 100644[m
+[1m--- a/server/lotterySettleHandler.ts[m
+[1m+++ b/server/lotterySettleHandler.ts[m
+[36m@@ -4,11 +4,18 @@[m
+  * Mounted at POST /api/scheduled/lotterySettle[m
+  * Triggered by Manus heartbeat cron after each draw time.[m
+  *[m
+[32m+[m[32m * Security: timing-safe secret comparison (LOTTERY_SETTLE_SECRET)[m
+[32m+[m[32m * + fallback to sdk.authenticateRequest for cron auth.[m
+[32m+[m[32m *[m
+[32m+[m[32m * Idempotency: one settlement key per lotteryKey + drawDate + scheduleWindow.[m
+[32m+[m[32m * Retry-safe: skips orders already settled on-chain.[m
+[32m+[m[32m *[m
+  * Flow:[m
+  * 1. Authenticate cron request[m
+  * 2. Find draws past their drawAt with status SCHEDULED or SALES_CLOSED[m
+  * 3. For each draw: fetch official result, import snapshot, settle all PAID orders[m
+[31m- * 4. Return summary[m
+[32m+[m[32m * 4. Ensure upcoming draws exist[m
+[32m+[m[32m * 5. Return structured summary with imported/settled/skipped/errors counts[m
+  */[m
+ import type { Request, Response } from "express";[m
+ import { and, eq, inArray, lt } from "drizzle-orm";[m
+[36m@@ -19,23 +26,88 @@[m [mimport {[m
+   fetchOfficialLotterySnapshot,[m
+   buildLotterySettlement,[m
+   ensureUpcomingLotteryDraw,[m
+[32m+[m[32m  resultHash,[m
+[32m+[m[32m  sourceHash,[m
+ } from "./lottery";[m
+[32m+[m[32mimport { randomId } from "./ggc";[m
+[32m+[m[32mimport { lotteryResultSnapshots } from "../drizzle/schema";[m
+ import type { LotteryKey, LotteryResult } from "../shared/lottery";[m
+ import type { Hex } from "viem";[m
+ [m
+[31m-export async function lotterySettleHandler(req: Request, res: Response) {[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  Timing-safe string comparison                                     */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+[32m+[m[32mfunction timingSafeEqualString(a: string, b: string): boolean {[m
+[32m+[m[32m  const encoder = new TextEncoder();[m
+[32m+[m[32m  const left = encoder.encode(a);[m
+[32m+[m[32m  const right = encoder.encode(b);[m
+[32m+[m[32m  if (left.length !== right.length) return false;[m
+[32m+[m
+[32m+[m[32m  let diff = 0;[m
+[32m+[m[32m  for (let i = 0; i < left.length; i += 1) {[m
+[32m+[m[32m    diff |= left[i]! ^ right[i]!;[m
+[32m+[m[32m  }[m
+[32m+[m[32m  return diff === 0;[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  Authentication                                                    */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+[32m+[m[32masync function authenticateSettleRequest(req: Request): Promise<boolean> {[m
+[32m+[m[32m  // Primary: timing-safe secret header check[m
+[32m+[m[32m  const expectedSecret = process.env.LOTTERY_SETTLE_SECRET;[m
+[32m+[m[32m  const providedSecret = req.header("x-ggc-scheduler-secret") ?? "";[m
+[32m+[m
+[32m+[m[32m  if (expectedSecret && providedSecret) {[m
+[32m+[m[32m    return timingSafeEqualString(providedSecret, expectedSecret);[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // Fallback: Manus SDK cron authentication[m
+   try {[m
+     const user = await sdk.authenticateRequest(req);[m
+[31m-    if (!user.isCron) {[m
+[31m-      return res.status(403).json({ error: "cron-only" });[m
+[32m+[m[32m    return !!user.isCron;[m
+[32m+[m[32m  } catch {[m
+[32m+[m[32m    return false;[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m[32m/*  Handler                                                           */[m
+[32m+[m[32m/* ------------------------------------------------------------------ */[m
+[32m+[m
+[32m+[m[32mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+[32m+[m[32m  const summary = {[m
+[32m+[m[32m    ok: false,[m
+[32m+[m[32m    imported: 0,[m
+[32m+[m[32m    settled: 0,[m
+[32m+[m[32m    skipped: 0,[m
+[32m+[m[32m    errors: 0,[m
+[32m+[m[32m    details: [] as Array<{[m
+[32m+[m[32m      drawId: string;[m
+[32m+[m[32m      lotteryKey: string;[m
+[32m+[m[32m      action: string;[m
+[32m+[m[32m      ordersSettled: number;[m
+[32m+[m[32m      ordersSkipped: number;[m
+[32m+[m[32m      error?: string;[m
+[32m+[m[32m    }>,[m
+[32m+[m[32m    timestamp: new Date().toISOString(),[m
+[32m+[m[32m  };[m
+[32m+[m
+[32m+[m[32m  try {[m
+[32m+[m[32m    const isAuthed = await authenticateSettleRequest(req);[m
+[32m+[m[32m    if (!isAuthed) {[m
+[32m+[m[32m      return res.status(401).json({ ok: false, error: "unauthorized" });[m
+     }[m
+ [m
+     const db = await getDb();[m
+     if (!db) {[m
+[31m-      return res.status(500).json({ error: "database unavailable" });[m
+[32m+[m[32m      return res.status(500).json({ ok: false, error: "database unavailable" });[m
+     }[m
+ [m
+     const now = new Date();[m
+[32m+[m
+     // Find draws that are past their draw time but not yet settled[m
+     const pendingDraws = await db[m
+       .select()[m
+[36m@@ -43,35 +115,29 @@[m [mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+       .where([m
+         and([m
+           lt(lotteryDraws.drawAt, now),[m
+[31m-          inArray(lotteryDraws.status, ["SCHEDULED", "SALES_CLOSED", "RESULT_IMPORTED"])[m
+[32m+[m[32m          inArray(lotteryDraws.status, [[m
+[32m+[m[32m            "SCHEDULED",[m
+[32m+[m[32m            "SALES_CLOSED",[m
+[32m+[m[32m            "RESULT_IMPORTED",[m
+[32m+[m[32m          ])[m
+         )[m
+       )[m
+       .limit(10);[m
+ [m
+[31m-    const results: Array<{[m
+[31m-      drawId: string;[m
+[31m-      lotteryKey: string;[m
+[31m-      action: string;[m
+[31m-      ordersSettled: number;[m
+[31m-      error?: string;[m
+[31m-    }> = [];[m
+[31m-[m
+     for (const draw of pendingDraws) {[m
+       const lotteryKey = draw.lotteryKey as LotteryKey;[m
+[32m+[m[32m      let drawResult: LotteryResult | null =[m
+[32m+[m[32m        draw.resultJson as LotteryResult | null;[m
+ [m
+       // Step 1: If no result yet, fetch it[m
+[31m-      let drawResult: LotteryResult | null = draw.resultJson as LotteryResult | null;[m
+[31m-[m
+[31m-      if (!drawResult && (draw.status === "SCHEDULED" || draw.status === "SALES_CLOSED")) {[m
+[32m+[m[32m      if ([m
+[32m+[m[32m        !drawResult &&[m
+[32m+[m[32m        (draw.status === "SCHEDULED" || draw.status === "SALES_CLOSED")[m
+[32m+[m[32m      ) {[m
+         try {[m
+           const snapshot = await fetchOfficialLotterySnapshot(lotteryKey);[m
+           if (snapshot.result && snapshot.confidence === "HIGH") {[m
+             drawResult = snapshot.result;[m
+[31m-            // Update draw with result[m
+[31m-            const { resultHash } = await import("./lottery");[m
+[31m-            const { sourceHash } = await import("./lottery");[m
+[31m-            const { randomId } = await import("./ggc");[m
+[31m-            const { lotteryResultSnapshots } = await import("../drizzle/schema");[m
+             const rHash = resultHash(drawResult);[m
+             const sHash = sourceHash(snapshot.rawSnapshot);[m
+ [m
+[36m@@ -96,41 +162,54 @@[m [mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+                 updatedAt: new Date(),[m
+               })[m
+               .where(eq(lotteryDraws.drawId, draw.drawId));[m
+[32m+[m
+[32m+[m[32m            summary.imported++;[m
+           } else {[m
+             // Could not parse result — mark for review[m
+             await db[m
+               .update(lotteryDraws)[m
+[31m-              .set({ status: "RESULT_REVIEW_REQUIRED", updatedAt: new Date() })[m
+[32m+[m[32m              .set({[m
+[32m+[m[32m                status: "RESULT_REVIEW_REQUIRED",[m
+[32m+[m[32m                updatedAt: new Date(),[m
+[32m+[m[32m              })[m
+               .where(eq(lotteryDraws.drawId, draw.drawId));[m
+ [m
+[31m-            results.push({[m
+[32m+[m[32m            summary.details.push({[m
+               drawId: draw.drawId,[m
+               lotteryKey,[m
+               action: "RESULT_REVIEW_REQUIRED",[m
+               ordersSettled: 0,[m
+[31m-              error: "Could not parse official result — confidence: " + snapshot.confidence,[m
+[32m+[m[32m              ordersSkipped: 0,[m
+[32m+[m[32m              error:[m
+[32m+[m[32m                "Could not parse official result — confidence: " +[m
+[32m+[m[32m                snapshot.confidence,[m
+             });[m
+[32m+[m[32m            summary.errors++;[m
+             continue;[m
+           }[m
+         } catch (err) {[m
+[31m-          results.push({[m
+[32m+[m[32m          summary.details.push({[m
+             drawId: draw.drawId,[m
+             lotteryKey,[m
+             action: "FETCH_ERROR",[m
+             ordersSettled: 0,[m
+[32m+[m[32m            ordersSkipped: 0,[m
+             error: String(err),[m
+           });[m
+[32m+[m[32m          summary.errors++;[m
+           continue;[m
+         }[m
+       }[m
+ [m
+       if (!drawResult) {[m
+[31m-        results.push({[m
+[32m+[m[32m        summary.details.push({[m
+           drawId: draw.drawId,[m
+           lotteryKey,[m
+           action: "NO_RESULT",[m
+           ordersSettled: 0,[m
+[32m+[m[32m          ordersSkipped: 0,[m
+         });[m
+[32m+[m[32m        summary.skipped++;[m
+         continue;[m
+       }[m
+ [m
+[36m@@ -146,7 +225,8 @@[m [mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+         )[m
+         .limit(100);[m
+ [m
+[31m-      let settled = 0;[m
+[32m+[m[32m      let settledCount = 0;[m
+[32m+[m[32m      let skippedCount = 0;[m
+       for (const order of paidOrders) {[m
+         try {[m
+           await buildLotterySettlement([m
+[36m@@ -155,25 +235,45 @@[m [mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+             JSON.stringify(drawResult),[m
+             draw.sourceUrl[m
+           );[m
+[31m-          settled++;[m
+[32m+[m[32m          settledCount++;[m
+         } catch (err) {[m
+[31m-          console.error(`[lottery-settle] Failed to settle order ${order.orderId}:`, err);[m
+[32m+[m[32m          const errMsg = String(err);[m
+[32m+[m[32m          // Skip orders already settled on-chain (idempotency)[m
+[32m+[m[32m          if ([m
+[32m+[m[32m            errMsg.includes("already settled") ||[m
+[32m+[m[32m            errMsg.includes("ALREADY_SETTLED")[m
+[32m+[m[32m          ) {[m
+[32m+[m[32m            skippedCount++;[m
+[32m+[m[32m          } else {[m
+[32m+[m[32m            console.error([m
+[32m+[m[32m              `[lottery-settle] Failed to settle order ${order.orderId}:`,[m
+[32m+[m[32m              err[m
+[32m+[m[32m            );[m
+[32m+[m[32m            summary.errors++;[m
+[32m+[m[32m          }[m
+         }[m
+       }[m
+ [m
+[31m-      // If all orders settled, mark draw as SETTLED[m
+[31m-      if (paidOrders.length > 0 && settled === paidOrders.length) {[m
+[32m+[m[32m      summary.settled += settledCount;[m
+[32m+[m[32m      summary.skipped += skippedCount;[m
+[32m+[m
+[32m+[m[32m      // If all orders settled or skipped, mark draw as SETTLED[m
+[32m+[m[32m      if ([m
+[32m+[m[32m        paidOrders.length > 0 &&[m
+[32m+[m[32m        settledCount + skippedCount === paidOrders.length[m
+[32m+[m[32m      ) {[m
+         await db[m
+           .update(lotteryDraws)[m
+           .set({ status: "SETTLED", updatedAt: new Date() })[m
+           .where(eq(lotteryDraws.drawId, draw.drawId));[m
+       }[m
+ [m
+[31m-      results.push({[m
+[32m+[m[32m      summary.details.push({[m
+         drawId: draw.drawId,[m
+         lotteryKey,[m
+         action: "SETTLED",[m
+[31m-        ordersSettled: settled,[m
+[32m+[m[32m        ordersSettled: settledCount,[m
+[32m+[m[32m        ordersSkipped: skippedCount,[m
+       });[m
+     }[m
+ [m
+[36m@@ -181,19 +281,14 @@[m [mexport async function lotterySettleHandler(req: Request, res: Response) {[m
+     await ensureUpcomingLotteryDraw("usMegaJackpot");[m
+     await ensureUpcomingLotteryDraw("usPowerJackpot");[m
+ [m
+[31m-    return res.json({[m
+[31m-      ok: true,[m
+[31m-      drawsProcessed: pendingDraws.length,[m
+[31m-      results,[m
+[31m-      timestamp: new Date().toISOString(),[m
+[31m-    });[m
+[32m+[m[32m    summary.ok = true;[m
+[32m+[m[32m    return res.json(summary);[m
+   } catch (err) {[m
+     console.error("[lottery-settle] Handler error:", err);[m
+[32m+[m[32m    summary.errors++;[m
+     return res.status(500).json({[m
+[32m+[m[32m      ...summary,[m
+       error: String(err),[m
+[31m-      stack: err instanceof Error ? err.stack : undefined,[m
+[31m-      context: { url: req.url, taskUid: (err as any)?.taskUid },[m
+[31m-      timestamp: new Date().toISOString(),[m
+     });[m
+   }[m
+ }[m
+[1mdiff --git a/todo.md b/todo.md[m
+[1mindex 75746a1..db6954d 100644[m
+[1m--- a/todo.md[m
+[1m+++ b/todo.md[m
+[36m@@ -562,3 +562,12 @@[m
+ - [x] Send Codex audit package via GitHub Issue → https://github.com/manuscodex/manus-audit-inbox/issues/4 + artifacts pushed to repo[m
+ - [x] Implement precise lottery settlement schedule: +5min, +30min, +1h, +24h after each draw time (documented in references/lottery-schedules.md, registration pending deploy)[m
+ - [x] Add monthly schedule check (1st of month) to verify no draw time changes or special draws (documented, AGENT cron)[m
+[32m+[m
+[32m+[m[32m## Codex Issue #4 Fix Package[m
+[32m+[m[32m- [x] Fix 1: Remove static canonical from client/index.html + fix og:url trailing slash + remove static robots meta[m
+[32m+[m[32m- [x] Fix 2: Create server/seoRoutes.ts with route whitelist and helpers (17 public routes + /burn)[m
+[32m+[m[32m- [x] Fix 3: Add SEO middleware in server/_core/index.ts (404 for unknown routes, res.locals.seo)[m
+[32m+[m[32m- [x] Fix 4: Create injectSeoHead function in vite.ts — strips existing canonical/robots, injects exactly one of each (dev + prod)[m
+[32m+[m[32m- [x] Fix 5: Add timing-safe auth guard to lotterySettleHandler (timingSafeEqualString + SDK fallback, structured response with imported/settled/skipped/errors, idempotent skip for already-settled orders)[m
+[32m+[m[32m- [x] Remove static robots meta from client/index.html (will be injected server-side)[m
+[32m+[m[32m- [ ] Send verification report to Codex via GitHub with diff, test results, live checks[m
